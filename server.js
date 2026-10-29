@@ -7,6 +7,7 @@ const mongoose = require("mongoose");
 const authRoutes = require("./routes/authRoutes");
 const authMiddleware = require("./middleware/authMiddleware");
 const userRoutes = require("./routes/userRoutes");
+const authorizeRole = require("./middleware/roleMiddleware");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -30,6 +31,19 @@ app.get("/api/protected", authMiddleware, (req, res) => {
         user: req.user
     });
 });
+
+
+app.get(
+    "/api/driver/dashboard",
+    authMiddleware,
+    authorizeRole("driver"),
+    (req, res) => {
+        res.status(200).json({
+            message: "Welcome to the Driver Dashboard!",
+            user: req.user
+        });
+    }
+);
 
 // Connect database and start server
 async function startServer() {
