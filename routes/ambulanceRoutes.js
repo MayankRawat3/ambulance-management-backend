@@ -144,4 +144,58 @@ router.patch(
     }
 );
 
+
+router.get(
+    "/available",
+    authMiddleware,
+    authorizeRole("driver"),
+    async (req, res) => {
+        try {
+            const requests = await AmbulanceRequest.find({
+                status: "pending",
+                assignedDriver: null
+            })
+                .populate("patient", "name phone email")
+                .sort({ createdAt: -1 });
+
+            return res.status(200).json({
+                message: "Available ambulance requests fetched successfully",
+                requests
+            });
+        } catch (error) {
+            console.error("Available requests error:", error.message);
+            return res.status(500).json({
+                message: "Server error while fetching available ambulance requests."
+            });
+        }
+    }
+);
+
+
+
+router.get(
+    "/my-assigned",
+    authMiddleware,
+    authorizeRole("driver"),
+    async (req, res) => {
+        try {
+            const requests = await AmbulanceRequest.find({
+                assignedDriver: req.user.userId
+            })
+                .populate("patient", "name phone email")
+                .sort({ createdAt: -1 });
+
+            return res.status(200).json({
+                message: "Your assigned ambulance requests fetched successfully",
+                requests
+            });
+        } catch (error) {
+            console.error("My assigned requests error:", error.message);
+            return res.status(500).json({
+                message: "Server error while fetching assigned ambulance requests."
+            });
+        }
+    }
+);
+
 module.exports = router;
