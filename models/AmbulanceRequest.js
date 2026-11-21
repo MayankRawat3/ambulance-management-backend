@@ -9,6 +9,12 @@ const ambulanceRequestSchema = new mongoose.Schema(
             required: true
         },
 
+        assignedDriver: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null
+        },
+
         pickupLocation: {
             type: String,
             required: true,

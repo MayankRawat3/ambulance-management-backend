@@ -97,4 +97,51 @@ router.get(
     }
 );
 
+
+// Driver accepts an ambulance request
+router.patch(
+    "/:requestId/accept",
+    authMiddleware,
+    authorizeRole("driver"),
+    async (req, res) => {
+        try {
+            const request = await AmbulanceRequest.findOneAndUpdate(
+                {
+                    _id: req.params.requestId,
+                    status: "pending",
+                    assignedDriver: null
+                },
+                {
+                    $set: {
+                        status: "accepted",
+                        assignedDriver: req.user.userId
+                    }
+                },
+                {
+                    new: true,
+                    runValidators: true
+                }
+            );
+
+            if (!request) {
+                return res.status(409).json({
+                    message: "Request is unavailable or already accepted."
+                });
+            }
+
+            return res.status(200).json({
+                message: "Ambulance request accepted successfully",
+                request
+            });
+
+        } catch (error) {
+            console.error("Accept request error:", error.message);
+
+            return res.status(500).json({
+                message: "Server error while accepting ambulance request."
+            });
+        }
+    }
+);
+
 module.exports = router;
