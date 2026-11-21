@@ -8,6 +8,7 @@ const authRoutes = require("./routes/authRoutes");
 const authMiddleware = require("./middleware/authMiddleware");
 const userRoutes = require("./routes/userRoutes");
 const authorizeRole = require("./middleware/roleMiddleware");
+const ambulanceRoutes = require("./routes/ambulanceRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -24,6 +25,7 @@ app.get("/", (req, res) => {
 // Authentication routes
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/ambulance", ambulanceRoutes);
 
 app.get("/api/protected", authMiddleware, (req, res) => {
     res.status(200).json({
@@ -62,3 +64,5 @@ async function startServer() {
 }
 
 startServer();
+
+
