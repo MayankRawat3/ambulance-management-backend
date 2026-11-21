@@ -198,4 +198,50 @@ router.get(
     }
 );
 
+
+
+router.patch(
+    "/:requestId/complete",
+    authMiddleware,
+    authorizeRole("driver"),
+    async (req, res) => {
+        try {
+            const request = await AmbulanceRequest.findOneAndUpdate(
+                {
+                    _id: req.params.requestId,
+                    assignedDriver: req.user.userId,
+                    status: "accepted"
+                },
+                {
+                    $set: {
+                        status: "completed"
+                    }
+                },
+                {
+                    new: true,
+                    runValidators: true
+                }
+            );
+
+            if (!request) {
+                return res.status(404).json({
+                    message: "Request not found or cannot be completed."
+                });
+            }
+
+            return res.status(200).json({
+                message: "Ambulance request marked as completed successfully",
+                request
+            });
+        } catch (error) {
+            console.error("Complete request error:", error.message);
+
+            return res.status(500).json({
+                message: "Server error while completing ambulance request."
+            });
+        }
+    }
+);
+
+
 module.exports = router;
