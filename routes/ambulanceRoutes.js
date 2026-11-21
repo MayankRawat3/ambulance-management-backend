@@ -244,4 +244,49 @@ router.patch(
 );
 
 
+router.patch(
+    "/:requestId/cancel",
+    authMiddleware,
+    authorizeRole("patient"),
+    async (req, res) => {
+        try {
+            const request = await AmbulanceRequest.findOneAndUpdate(
+                {
+                    _id: req.params.requestId,
+                    patient: req.user.userId,
+                    status: "pending",
+                    assignedDriver: null
+                },
+                {
+                    $set: {
+                        status: "cancelled"
+                    }
+                },
+                {
+                    new: true,
+                    runValidators: true
+                }
+            );
+
+            if (!request) {
+                return res.status(404).json({
+                    message: "Request not found or cannot be cancelled."
+                });
+            }
+
+            return res.status(200).json({
+                message: "Ambulance request cancelled successfully",
+                request
+            });
+        } catch (error) {
+            console.error("Cancel request error:", error.message);
+
+            return res.status(500).json({
+                message: "Server error while cancelling ambulance request."
+            });
+        }
+    }
+);
+
+
 module.exports = router;
