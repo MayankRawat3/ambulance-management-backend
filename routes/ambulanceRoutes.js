@@ -70,4 +70,31 @@ router.post(
     }
 );
 
+
+// Get all ambulance requests of logged-in patient
+router.get(
+    "/my-requests",
+    authMiddleware,
+    authorizeRole("patient"),
+    async (req, res) => {
+        try {
+            const requests = await AmbulanceRequest.find({
+                patient: req.user.userId
+            }).sort({ createdAt: -1 });
+
+            return res.status(200).json({
+                message: "Ambulance requests fetched successfully",
+                requests
+            });
+
+        } catch (error) {
+            console.error("Fetch requests error:", error.message);
+
+            return res.status(500).json({
+                message: "Server error while fetching ambulance requests."
+            });
+        }
+    }
+);
+
 module.exports = router;
