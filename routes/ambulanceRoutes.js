@@ -2,6 +2,8 @@ const express = require("express");
 const AmbulanceRequest = require("../models/AmbulanceRequest");
 const authMiddleware = require("../middleware/authMiddleware");
 const authorizeRole = require("../middleware/roleMiddleware");
+const User = require("../models/User");
+
 
 const router = express.Router();
 
@@ -283,6 +285,87 @@ router.patch(
 
             return res.status(500).json({
                 message: "Server error while cancelling ambulance request."
+            });
+        }
+    }
+);
+
+
+router.patch(
+    "/availability",
+    authMiddleware,
+    authorizeRole("driver"),
+    async (req, res) => {
+        try {
+            const { isAvailable } = req.body;
+
+            if (typeof isAvailable !== "boolean") {
+                return res.status(400).json({
+                    message: "isAvailable must be true or false."
+                });
+            }
+
+            const driver = await User.findOneAndUpdate(
+                {
+                    _id: req.user.userId,
+                    role: "driver"
+                },
+                {
+                    $set: { isAvailable }
+                },
+                {
+                    new: true,
+                    runValidators: true
+                }
+            ).select("-password");
+
+            if (!driver) {
+                return res.status(404).json({
+                    message: "Driver not found."
+                });
+            }
+
+            return res.status(200).json({
+                message: "Driver availability updated successfully.",
+                driver
+            });
+        } catch (error) {
+            console.error("Availability update error:", error.message);
+
+            return res.status(500).json({
+                message: "Server error while updating driver availability."
+            });
+        }
+    }
+);
+
+
+router.get(
+    "/availability",
+    authMiddleware,
+    authorizeRole("driver"),
+    async (req, res) => {
+        try {
+            const driver = await User.findOne({
+                _id: req.user.userId,
+                role: "driver"
+            }).select("name email role isAvailable");
+
+            if (!driver) {
+                return res.status(404).json({
+                    message: "Driver not found."
+                });
+            }
+
+            return res.status(200).json({
+                message: "Driver availability fetched successfully.",
+                driver
+            });
+        } catch (error) {
+            console.error("Fetch availability error:", error.message);
+
+            return res.status(500).json({
+                message: "Server error while fetching driver availability."
             });
         }
     }

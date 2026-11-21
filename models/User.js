@@ -27,6 +27,10 @@ const userSchema = new mongoose.Schema(
             type: String,
             enum: ["patient", "driver", "hospital"],
             required: true
+        },
+        isAvailable: {
+            type: Boolean,
+            default: false
         }
     },
     { timestamps: true }
