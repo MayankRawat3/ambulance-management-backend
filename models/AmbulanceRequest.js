@@ -21,6 +21,18 @@ const ambulanceRequestSchema = new mongoose.Schema(
             trim: true
         },
 
+        pickupCoordinates: {
+            type: {
+                type: String,
+                enum: ["Point"],
+                required: true
+            },
+            coordinates: {
+                type: [Number],
+                required: true
+            }
+        },
+
         destination: {
             type: String,
             required: true,

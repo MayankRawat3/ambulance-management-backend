@@ -21,10 +21,11 @@ router.post(
                 pickupLocation,
                 destination,
                 emergencyType,
-                description
+                description,
+                longitude,
+                latitude
             } = req.body;
 
-            // Check required fields
             if (
                 typeof pickupLocation !== "string" ||
                 typeof destination !== "string" ||
@@ -35,13 +36,10 @@ router.post(
                 });
             }
 
-            // Trim input values
             const cleanPickupLocation = pickupLocation.trim();
             const cleanDestination = destination.trim();
             const cleanEmergencyType = emergencyType.trim();
 
-
-            // Check empty values
             if (
                 !cleanPickupLocation ||
                 !cleanDestination ||
@@ -52,7 +50,6 @@ router.post(
                 });
             }
 
-            // Validate description
             if (
                 description !== undefined &&
                 typeof description !== "string"
@@ -62,7 +59,22 @@ router.post(
                 });
             }
 
-            //checkpoint - Check valid emergency type
+            const lon = Number(longitude);
+            const lat = Number(latitude);
+
+            if (
+                longitude === undefined ||
+                latitude === undefined ||
+                !Number.isFinite(lon) ||
+                !Number.isFinite(lat) ||
+                lon < -180 || lon > 180 ||
+                lat < -90 || lat > 90
+            ) {
+                return res.status(400).json({
+                    message: "Valid longitude and latitude are required."
+                });
+            }
+
             const allowedEmergencyTypes = [
                 "Medical Emergency",
                 "Accident",
@@ -76,10 +88,13 @@ router.post(
                 });
             }
 
-            // Save request in MongoDB
             const ambulanceRequest = await AmbulanceRequest.create({
                 patient: req.user.userId,
                 pickupLocation: cleanPickupLocation,
+                pickupCoordinates: {
+                    type: "Point",
+                    coordinates: [lon, lat]
+                },
                 destination: cleanDestination,
                 emergencyType: cleanEmergencyType,
                 description: description?.trim() || ""
@@ -273,6 +288,230 @@ router.get(
 );
 
 
+// Find nearby available drivers with distance
+router.get(
+    "/nearby-drivers",
+    authMiddleware,
+    authorizeRole("hospital"),
+    async (req, res) => {
+        try {
+            const { longitude, latitude, maxDistance = 10000 } = req.query;
+
+            const lon = Number(longitude);
+            const lat = Number(latitude);
+            const distance = Number(maxDistance);
+
+            if (
+                longitude === undefined ||
+                latitude === undefined ||
+                !Number.isFinite(lon) ||
+                !Number.isFinite(lat) ||
+                lon < -180 || lon > 180 ||
+                lat < -90 || lat > 90 ||
+                !Number.isFinite(distance) ||
+                distance <= 0
+            ) {
+                return res.status(400).json({
+                    message: "Valid longitude, latitude and maxDistance are required."
+                });
+            }
+
+            const drivers = await User.aggregate([
+                {
+                    $geoNear: {
+                        near: {
+                            type: "Point",
+                            coordinates: [lon, lat]
+                        },
+                        distanceField: "distanceInMeters",
+                        maxDistance: distance,
+                        spherical: true,
+                        query: {
+                            role: "driver",
+                            isAvailable: true
+                        }
+                    }
+                },
+                {
+                    $limit: 20
+                },
+                {
+                    $project: {
+                        name: 1,
+                        phone: 1,
+                        location: 1,
+                        isAvailable: 1,
+                        distanceInMeters: 1,
+                        distanceInKm: {
+                            $round: [
+                                { $divide: ["$distanceInMeters", 1000] },
+                                2
+                            ]
+                        }
+                    }
+                }
+            ]);
+
+            return res.status(200).json({
+                message: "Nearby available drivers fetched successfully.",
+                count: drivers.length,
+                drivers
+            });
+
+        } catch (error) {
+            console.error("Nearby drivers error:", error.message);
+
+            return res.status(500).json({
+                message: "Server error while finding nearby drivers."
+            });
+        }
+    }
+);
+
+// Automatically assign nearest available driver
+router.patch(
+    "/:requestId/auto-assign",
+    authMiddleware,
+    authorizeRole("hospital"),
+    async (req, res) => {
+        try {
+            const { requestId } = req.params;
+
+            if (!mongoose.Types.ObjectId.isValid(requestId)) {
+                return res.status(400).json({
+                    message: "Invalid ambulance request ID."
+                });
+            }
+
+            const request = await AmbulanceRequest.findOne({
+                _id: requestId,
+                status: "pending",
+                assignedDriver: null
+            });
+
+            if (!request) {
+                return res.status(404).json({
+                    message: "Pending ambulance request not found."
+                });
+            }
+
+            const [longitude, latitude] =
+                request.pickupCoordinates.coordinates;
+
+            const drivers = await User.aggregate([
+                {
+                    $geoNear: {
+                        near: {
+                            type: "Point",
+                            coordinates: [longitude, latitude]
+                        },
+                        distanceField: "distanceInMeters",
+                        maxDistance: 10000,
+                        spherical: true,
+                        query: {
+                            role: "driver",
+                            isAvailable: true
+                        }
+                    }
+                },
+                { $limit: 20 }
+            ]);
+
+            if (drivers.length === 0) {
+                return res.status(404).json({
+                    message: "No available drivers found nearby."
+                });
+            }
+
+            for (const candidate of drivers) {
+                const activeRequest = await AmbulanceRequest.findOne({
+                    assignedDriver: candidate._id,
+                    status: { $in: ["accepted", "assigned"] }
+                });
+
+                if (activeRequest) {
+                    await User.updateOne(
+                        { _id: candidate._id },
+                        { $set: { isAvailable: false } }
+                    );
+                    continue;
+                }
+
+                const lockedDriver = await User.findOneAndUpdate(
+                    {
+                        _id: candidate._id,
+                        role: "driver",
+                        isAvailable: true
+                    },
+                    {
+                        $set: { isAvailable: false }
+                    },
+                    { returnDocument: "after" }
+                );
+
+                if (!lockedDriver) {
+                    continue;
+                }
+
+                const assignedRequest =
+                    await AmbulanceRequest.findOneAndUpdate(
+                        {
+                            _id: requestId,
+                            status: "pending",
+                            assignedDriver: null
+                        },
+                        {
+                            $set: {
+                                assignedDriver: candidate._id,
+                                status: "accepted"
+                            }
+                        },
+                        {
+                            returnDocument: "after",
+                            runValidators: true
+                        }
+                    );
+
+                if (!assignedRequest) {
+                    await User.updateOne(
+                        { _id: candidate._id },
+                        { $set: { isAvailable: true } }
+                    );
+
+                    return res.status(409).json({
+                        message: "Request was assigned or changed by another process."
+                    });
+                }
+
+                return res.status(200).json({
+                    message: "Nearest driver assigned successfully.",
+                    distanceInMeters: candidate.distanceInMeters,
+                    distanceInKm: Number(
+                        (candidate.distanceInMeters / 1000).toFixed(2)
+                    ),
+                    request: assignedRequest,
+                    driver: {
+                        _id: lockedDriver._id,
+                        name: lockedDriver.name,
+                        phone: lockedDriver.phone,
+                        isAvailable: lockedDriver.isAvailable
+                    }
+                });
+            }
+
+            return res.status(409).json({
+                message: "No driver is currently available for assignment."
+            });
+
+        } catch (error) {
+            console.error("Auto assignment error:", error.message);
+
+            return res.status(500).json({
+                message: "Server error during automatic driver assignment."
+            });
+        }
+    }
+);
 
 router.get(
     "/my-assigned",
@@ -509,6 +748,7 @@ router.get(
     }
 );
 
+// Hospital dashboard to view all requests
 router.get(
     "/hospital/requests",
     authMiddleware,
