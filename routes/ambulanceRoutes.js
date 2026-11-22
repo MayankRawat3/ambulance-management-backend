@@ -371,5 +371,31 @@ router.get(
     }
 );
 
+router.get(
+    "/hospital/requests",
+    authMiddleware,
+    authorizeRole("hospital"),
+    async (req, res) => {
+        try {
+            const requests = await AmbulanceRequest.find()
+                .populate("patient", "name phone email")
+                .populate("assignedDriver", "name phone email isAvailable")
+                .sort({ createdAt: -1 });
+
+            return res.status(200).json({
+                message: "Hospital dashboard requests fetched successfully",
+                totalRequests: requests.length,
+                requests
+            });
+        } catch (error) {
+            console.error("Hospital dashboard error:", error.message);
+
+            return res.status(500).json({
+                message: "Server error while fetching hospital dashboard."
+            });
+        }
+    }
+);
+
 
 module.exports = router;
