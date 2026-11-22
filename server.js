@@ -9,12 +9,39 @@ const authMiddleware = require("./middleware/authMiddleware");
 const userRoutes = require("./routes/userRoutes");
 const authorizeRole = require("./middleware/roleMiddleware");
 const ambulanceRoutes = require("./routes/ambulanceRoutes");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 
 const app = express();
+
 const PORT = process.env.PORT || 5000;
 
 // Read JSON data sent by client
-app.use(express.json());
+app.use(helmet());
+app.use(express.json({ limit: "10kb" }));
+
+const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 100,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: {
+        message: "Too many requests. Please try again after 15 minutes."
+    }
+});
+
+app.use(globalLimiter);
+
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: {
+        message: "Too many authentication attempts. Try again after 15 minutes."
+    }
+});
+
 
 // Home route
 app.get("/", (req, res) => {
@@ -23,9 +50,10 @@ app.get("/", (req, res) => {
 
 
 // Authentication routes
-app.use("/api/auth", authRoutes);
+app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/ambulance", ambulanceRoutes);
+
 
 app.get("/api/protected", authMiddleware, (req, res) => {
     res.status(200).json({
