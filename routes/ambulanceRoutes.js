@@ -446,5 +446,118 @@ router.get(
     }
 );
 
+// PATCH /location
+router.patch(
+    "/location",
+    authMiddleware,
+    authorizeRole("driver"),
+    async (req, res) => {
+        try {
+            const { latitude, longitude } = req.body;
+
+            if (
+                typeof latitude !== "number" ||
+                typeof longitude !== "number"
+            ) {
+                return res.status(400).json({
+                    message: "Latitude and longitude must be numbers."
+                });
+            }
+
+            if (
+                latitude < -90 ||
+                latitude > 90 ||
+                longitude < -180 ||
+                longitude > 180
+            ) {
+                return res.status(400).json({
+                    message: "Invalid latitude or longitude values."
+                });
+            }
+
+            const driver = await User.findOneAndUpdate(
+                {
+                    _id: req.user.userId,
+                    role: "driver"
+                },
+                {
+                    location: {
+                        type: "Point",
+                        coordinates: [longitude, latitude]
+                    }
+                },
+                { new: true }
+            ).select("-password");
+
+            if (!driver) {
+                return res.status(404).json({
+                    message: "Driver not found."
+                });
+            }
+
+            return res.status(200).json({
+                message: "Driver location updated successfully.",
+                location: driver.location
+            });
+
+        } catch (error) {
+            console.error("Location update error:", error.message);
+
+            return res.status(500).json({
+                message: "Server error while updating location."
+            });
+        }
+    }
+);
+
+
+// GET /:requestId/location
+router.get(
+    "/:requestId/location",
+    authMiddleware,
+    authorizeRole("patient"),
+    async (req, res) => {
+        try {
+            const { requestId } = req.params;
+
+            if (!mongoose.Types.ObjectId.isValid(requestId)) {
+                return res.status(400).json({
+                    message: "Invalid request ID."
+                });
+            }
+
+            const ambulanceRequest = await AmbulanceRequest.findOne({
+                _id: requestId,
+                patient: req.user.userId,
+                status: { $in: ["accepted", "assigned"] }
+            }).populate("assignedDriver", "name phone location");
+
+            if (!ambulanceRequest) {
+                return res.status(404).json({
+                    message: "Assigned ambulance request not found."
+                });
+            }
+
+            if (!ambulanceRequest.assignedDriver) {
+                return res.status(404).json({
+                    message: "No driver assigned to this request."
+                });
+            }
+
+            return res.status(200).json({
+                message: "Driver location fetched successfully.",
+                driver: ambulanceRequest.assignedDriver
+            });
+
+        } catch (error) {
+            console.error("Fetch driver location error:", error.message);
+
+            return res.status(500).json({
+                message: "Server error while fetching driver location."
+            });
+        }
+    }
+);
+
 
 module.exports = router;
