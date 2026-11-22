@@ -1,34 +1,15 @@
 
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
 const router = express.Router();
-
-const jwt = require("jsonwebtoken");
-
-
 
 // POST /register
 router.post("/register", async (req, res) => {
     try {
         const { name, email, phone, password, role } = req.body;
-
-        // Validate user role
-        const allowedRoles = ["patient", "driver", "hospital"];
-
-        if (!allowedRoles.includes(role)) {
-            return res.status(400).json({
-                message: "Invalid role. Use patient, driver, or hospital."
-            });
-        }
-
-        // Validate password length
-        if (password.length < 8) {
-            return res.status(400).json({
-                message: "Password must be at least 8 characters long"
-            });
-        }
 
         // Check required fields
         if (!name || !email || !phone || !password || !role) {
@@ -37,9 +18,58 @@ router.post("/register", async (req, res) => {
             });
         }
 
-        // Check whether email already exists
+        // Validate input types
+        if (
+            typeof name !== "string" ||
+            typeof email !== "string" ||
+            typeof phone !== "string" ||
+            typeof password !== "string" ||
+            typeof role !== "string"
+        ) {
+            return res.status(400).json({
+                message: "Invalid input types"
+            });
+        }
+
+        // Normalize inputs
+        const cleanName = name.trim();
+        const cleanEmail = email.trim().toLowerCase();
+        const cleanPhone = phone.trim();
+
+        if (!cleanName || !cleanEmail || !cleanPhone) {
+            return res.status(400).json({
+                message: "Fields cannot contain only spaces"
+            });
+        }
+
+        // Validate email
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+        if (!emailRegex.test(cleanEmail)) {
+            return res.status(400).json({
+                message: "Please enter a valid email address"
+            });
+        }
+
+        // Validate role
+        const allowedRoles = ["patient", "driver", "hospital"];
+
+        if (!allowedRoles.includes(role)) {
+            return res.status(400).json({
+                message: "Invalid role. Use patient, driver, or hospital."
+            });
+        }
+
+        // Validate password
+        if (password.length < 8) {
+            return res.status(400).json({
+                message: "Password must be at least 8 characters long"
+            });
+        }
+
+        // Check existing email
         const existingUser = await User.findOne({
-            email: email.toLowerCase().trim()
+            email: cleanEmail
         });
 
         if (existingUser) {
@@ -51,16 +81,16 @@ router.post("/register", async (req, res) => {
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Create user in MongoDB
+        // Create user
         const newUser = await User.create({
-            name,
-            email,
-            phone,
+            name: cleanName,
+            email: cleanEmail,
+            phone: cleanPhone,
             password: hashedPassword,
             role
         });
 
-        res.status(201).json({
+        return res.status(201).json({
             message: "Registration successful",
             user: {
                 id: newUser._id,
@@ -69,15 +99,21 @@ router.post("/register", async (req, res) => {
                 role: newUser.role
             }
         });
+
     } catch (error) {
         console.error("Registration error:", error.message);
 
-        res.status(500).json({
+        if (error.code === 11000) {
+            return res.status(409).json({
+                message: "Email already registered"
+            });
+        }
+
+        return res.status(500).json({
             message: "Server error during registration"
         });
     }
 });
-
 
 
 // POST /login
@@ -85,16 +121,33 @@ router.post("/login", async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // Check required fields
-        if (!email || !password) {
+        // Validate required fields
+        if (
+            typeof email !== "string" ||
+            typeof password !== "string" ||
+            !email.trim() ||
+            !password
+        ) {
             return res.status(400).json({
-                message: "Email and password are required"
+                message: "Valid email and password are required"
             });
         }
 
-        // Find user by email
+        // Normalize email
+        const cleanEmail = email.trim().toLowerCase();
+
+        // Validate email
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+        if (!emailRegex.test(cleanEmail)) {
+            return res.status(400).json({
+                message: "Please enter a valid email address"
+            });
+        }
+
+        // Find user
         const user = await User.findOne({
-            email: email.toLowerCase().trim()
+            email: cleanEmail
         });
 
         if (!user) {
@@ -103,7 +156,7 @@ router.post("/login", async (req, res) => {
             });
         }
 
-        // Compare entered password with hashed password
+        // Compare password
         const isPasswordCorrect = await bcrypt.compare(
             password,
             user.password
@@ -115,7 +168,7 @@ router.post("/login", async (req, res) => {
             });
         }
 
-        // Create JWT token
+        // Create JWT
         const token = jwt.sign(
             {
                 userId: user._id,
@@ -125,8 +178,7 @@ router.post("/login", async (req, res) => {
             { expiresIn: "1d" }
         );
 
-        // Send response
-        res.status(200).json({
+        return res.status(200).json({
             message: "Login successful",
             token,
             user: {
@@ -136,15 +188,14 @@ router.post("/login", async (req, res) => {
                 role: user.role
             }
         });
+
     } catch (error) {
         console.error("Login error:", error.message);
 
-        res.status(500).json({
+        return res.status(500).json({
             message: "Server error during login"
         });
     }
 });
-
-
 
 module.exports = router;

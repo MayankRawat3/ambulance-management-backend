@@ -3,6 +3,7 @@ const AmbulanceRequest = require("../models/AmbulanceRequest");
 const authMiddleware = require("../middleware/authMiddleware");
 const authorizeRole = require("../middleware/roleMiddleware");
 const User = require("../models/User");
+const mongoose = require("mongoose");
 
 
 const router = express.Router();
@@ -25,16 +26,43 @@ router.post(
 
             // Check required fields
             if (
-                !pickupLocation?.trim() ||
-                !destination?.trim() ||
-                !emergencyType
+                typeof pickupLocation !== "string" ||
+                typeof destination !== "string" ||
+                typeof emergencyType !== "string"
             ) {
                 return res.status(400).json({
                     message: "Pickup location, destination, and emergency type are required."
                 });
             }
 
-            // Check valid emergency type
+            // Trim input values
+            const cleanPickupLocation = pickupLocation.trim();
+            const cleanDestination = destination.trim();
+            const cleanEmergencyType = emergencyType.trim();
+
+
+            // Check empty values
+            if (
+                !cleanPickupLocation ||
+                !cleanDestination ||
+                !cleanEmergencyType
+            ) {
+                return res.status(400).json({
+                    message: "Fields cannot contain only spaces."
+                });
+            }
+
+            // Validate description
+            if (
+                description !== undefined &&
+                typeof description !== "string"
+            ) {
+                return res.status(400).json({
+                    message: "Description must be a string."
+                });
+            }
+
+            //checkpoint - Check valid emergency type
             const allowedEmergencyTypes = [
                 "Medical Emergency",
                 "Accident",
@@ -42,7 +70,7 @@ router.post(
                 "Other"
             ];
 
-            if (!allowedEmergencyTypes.includes(emergencyType)) {
+            if (!allowedEmergencyTypes.includes(cleanEmergencyType)) {
                 return res.status(400).json({
                     message: "Invalid emergency type."
                 });
@@ -51,10 +79,10 @@ router.post(
             // Save request in MongoDB
             const ambulanceRequest = await AmbulanceRequest.create({
                 patient: req.user.userId,
-                pickupLocation,
-                destination,
-                emergencyType,
-                description
+                pickupLocation: cleanPickupLocation,
+                destination: cleanDestination,
+                emergencyType: cleanEmergencyType,
+                description: description?.trim() || ""
             });
 
             return res.status(201).json({
@@ -106,6 +134,13 @@ router.patch(
     authMiddleware,
     authorizeRole("driver"),
     async (req, res) => {
+
+        if (!mongoose.Types.ObjectId.isValid(req.params.requestId)) {
+            return res.status(400).json({
+                message: "Invalid ambulance request ID."
+            });
+        }
+
         try {
             const request = await AmbulanceRequest.findOneAndUpdate(
                 {
@@ -207,6 +242,13 @@ router.patch(
     authMiddleware,
     authorizeRole("driver"),
     async (req, res) => {
+
+        if (!mongoose.Types.ObjectId.isValid(req.params.requestId)) {
+            return res.status(400).json({
+                message: "Invalid ambulance request ID."
+            });
+        }
+
         try {
             const request = await AmbulanceRequest.findOneAndUpdate(
                 {
@@ -251,6 +293,13 @@ router.patch(
     authMiddleware,
     authorizeRole("patient"),
     async (req, res) => {
+
+        if (!mongoose.Types.ObjectId.isValid(req.params.requestId)) {
+            return res.status(400).json({
+                message: "Invalid ambulance request ID."
+            });
+        }
+
         try {
             const request = await AmbulanceRequest.findOneAndUpdate(
                 {
