@@ -129,19 +129,64 @@ router.get(
 
 
 // Driver accepts an ambulance request
+// Driver accepts an ambulance request
 router.patch(
     "/:requestId/accept",
     authMiddleware,
     authorizeRole("driver"),
     async (req, res) => {
-
         if (!mongoose.Types.ObjectId.isValid(req.params.requestId)) {
             return res.status(400).json({
                 message: "Invalid ambulance request ID."
             });
         }
 
+        let driverLocked = false;
+
         try {
+            // Step 1: Atomically check and lock driver availability
+            const driver = await User.findOneAndUpdate(
+                {
+                    _id: req.user.userId,
+                    role: "driver",
+                    isAvailable: true
+                },
+                {
+                    $set: { isAvailable: false }
+                },
+                {
+                    returnDocument: "after",
+                    runValidators: true
+                }
+            );
+
+            if (!driver) {
+                return res.status(409).json({
+                    message: "You must be online and available to accept a request."
+                });
+            }
+
+            driverLocked = true;
+
+            // Step 2: Check for an existing active request
+            const activeRequest = await AmbulanceRequest.findOne({
+                assignedDriver: req.user.userId,
+                status: { $in: ["accepted", "assigned"] }
+            });
+
+            if (activeRequest) {
+                await User.updateOne(
+                    { _id: req.user.userId },
+                    { $set: { isAvailable: false } }
+                );
+
+                return res.status(409).json({
+                    message: "You already have an active ambulance request.",
+                    activeRequestId: activeRequest._id
+                });
+            }
+
+            // Step 3: Accept the pending request
             const request = await AmbulanceRequest.findOneAndUpdate(
                 {
                     _id: req.params.requestId,
@@ -155,24 +200,43 @@ router.patch(
                     }
                 },
                 {
-                    new: true,
+                    returnDocument: "after",
                     runValidators: true
                 }
             );
 
             if (!request) {
+                await User.updateOne(
+                    { _id: req.user.userId },
+                    { $set: { isAvailable: true } }
+                );
+
                 return res.status(409).json({
                     message: "Request is unavailable or already accepted."
                 });
             }
 
             return res.status(200).json({
-                message: "Ambulance request accepted successfully",
+                message: "Ambulance request accepted successfully.",
                 request
             });
 
         } catch (error) {
             console.error("Accept request error:", error.message);
+
+            if (driverLocked) {
+                const activeRequest = await AmbulanceRequest.findOne({
+                    assignedDriver: req.user.userId,
+                    status: { $in: ["accepted", "assigned"] }
+                });
+
+                if (!activeRequest) {
+                    await User.updateOne(
+                        { _id: req.user.userId },
+                        { $set: { isAvailable: true } }
+                    );
+                }
+            }
 
             return res.status(500).json({
                 message: "Server error while accepting ambulance request."
@@ -235,7 +299,7 @@ router.get(
     }
 );
 
-
+// PATCH /:requestId/complete
 
 router.patch(
     "/:requestId/complete",
@@ -250,6 +314,7 @@ router.patch(
         }
 
         try {
+            // Step 1: Complete the assigned request
             const request = await AmbulanceRequest.findOneAndUpdate(
                 {
                     _id: req.params.requestId,
@@ -262,7 +327,7 @@ router.patch(
                     }
                 },
                 {
-                    new: true,
+                    returnDocument: "after",
                     runValidators: true
                 }
             );
@@ -273,10 +338,34 @@ router.patch(
                 });
             }
 
+            // Step 2: Make driver available again
+            const driver = await User.findOneAndUpdate(
+                {
+                    _id: req.user.userId,
+                    role: "driver"
+                },
+                {
+                    $set: {
+                        isAvailable: true
+                    }
+                },
+                {
+                    returnDocument: "after"
+                }
+            );
+
+            if (!driver) {
+                return res.status(500).json({
+                    message: "Request completed, but driver availability could not be updated."
+                });
+            }
+
             return res.status(200).json({
-                message: "Ambulance request marked as completed successfully",
-                request
+                message: "Ambulance request completed successfully.",
+                request,
+                driverAvailability: driver.isAvailable
             });
+
         } catch (error) {
             console.error("Complete request error:", error.message);
 
