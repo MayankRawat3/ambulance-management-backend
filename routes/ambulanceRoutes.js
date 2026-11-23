@@ -11,6 +11,7 @@ const router = express.Router();
 
 // Create a new ambulance request
 
+
 router.post(
     "/request",
     authMiddleware,
@@ -51,6 +52,15 @@ router.post(
             }
 
             if (
+                cleanPickupLocation.length > 200 ||
+                cleanDestination.length > 200
+            ) {
+                return res.status(400).json({
+                    message: "Pickup location and destination cannot exceed 200 characters."
+                });
+            }
+
+            if (
                 description !== undefined &&
                 typeof description !== "string"
             ) {
@@ -59,19 +69,26 @@ router.post(
                 });
             }
 
-            const lon = Number(longitude);
-            const lat = Number(latitude);
+            const cleanDescription = description?.trim() || "";
+
+            if (cleanDescription.length > 1000) {
+                return res.status(400).json({
+                    message: "Description cannot exceed 1000 characters."
+                });
+            }
 
             if (
-                longitude === undefined ||
-                latitude === undefined ||
-                !Number.isFinite(lon) ||
-                !Number.isFinite(lat) ||
-                lon < -180 || lon > 180 ||
-                lat < -90 || lat > 90
+                typeof longitude !== "number" ||
+                typeof latitude !== "number" ||
+                !Number.isFinite(longitude) ||
+                !Number.isFinite(latitude) ||
+                longitude < -180 ||
+                longitude > 180 ||
+                latitude < -90 ||
+                latitude > 90
             ) {
                 return res.status(400).json({
-                    message: "Valid longitude and latitude are required."
+                    message: "Valid numeric longitude and latitude are required."
                 });
             }
 
@@ -93,11 +110,11 @@ router.post(
                 pickupLocation: cleanPickupLocation,
                 pickupCoordinates: {
                     type: "Point",
-                    coordinates: [lon, lat]
+                    coordinates: [longitude, latitude]
                 },
                 destination: cleanDestination,
                 emergencyType: cleanEmergencyType,
-                description: description?.trim() || ""
+                description: cleanDescription
             });
 
             return res.status(201).json({
@@ -114,6 +131,7 @@ router.post(
         }
     }
 );
+
 
 
 // Get all ambulance requests of logged-in patient
@@ -145,6 +163,8 @@ router.get(
 
 // Driver accepts an ambulance request
 // Driver accepts an ambulance request
+
+
 router.patch(
     "/:requestId/accept",
     authMiddleware,
@@ -156,109 +176,113 @@ router.patch(
             });
         }
 
-        let driverLocked = false;
+        const session = await mongoose.startSession();
 
         try {
-            // Step 1: Atomically check and lock driver availability
-            const driver = await User.findOneAndUpdate(
-                {
-                    _id: req.user.userId,
-                    role: "driver",
-                    isAvailable: true
-                },
-                {
-                    $set: { isAvailable: false }
-                },
-                {
-                    returnDocument: "after",
-                    runValidators: true
+            let acceptedRequest = null;
+
+            await session.withTransaction(async () => {
+
+                // Step 1: Check existing active request
+                const activeRequest = await AmbulanceRequest.findOne({
+                    assignedDriver: req.user.userId,
+                    status: { $in: ["accepted", "assigned"] }
+                }).session(session);
+
+                if (activeRequest) {
+                    const error = new Error(
+                        "You already have an active ambulance request."
+                    );
+                    error.statusCode = 409;
+                    error.responseBody = {
+                        message: error.message,
+                        activeRequestId: activeRequest._id
+                    };
+                    throw error;
                 }
-            );
 
-            if (!driver) {
-                return res.status(409).json({
-                    message: "You must be online and available to accept a request."
-                });
-            }
-
-            driverLocked = true;
-
-            // Step 2: Check for an existing active request
-            const activeRequest = await AmbulanceRequest.findOne({
-                assignedDriver: req.user.userId,
-                status: { $in: ["accepted", "assigned"] }
-            });
-
-            if (activeRequest) {
-                await User.updateOne(
-                    { _id: req.user.userId },
-                    { $set: { isAvailable: false } }
-                );
-
-                return res.status(409).json({
-                    message: "You already have an active ambulance request.",
-                    activeRequestId: activeRequest._id
-                });
-            }
-
-            // Step 3: Accept the pending request
-            const request = await AmbulanceRequest.findOneAndUpdate(
-                {
-                    _id: req.params.requestId,
-                    status: "pending",
-                    assignedDriver: null
-                },
-                {
-                    $set: {
-                        status: "accepted",
-                        assignedDriver: req.user.userId
+                // Step 2: Lock driver availability
+                const driver = await User.findOneAndUpdate(
+                    {
+                        _id: req.user.userId,
+                        role: "driver",
+                        isAvailable: true
+                    },
+                    {
+                        $set: { isAvailable: false }
+                    },
+                    {
+                        returnDocument: "after",
+                        runValidators: true,
+                        session
                     }
-                },
-                {
-                    returnDocument: "after",
-                    runValidators: true
-                }
-            );
-
-            if (!request) {
-                await User.updateOne(
-                    { _id: req.user.userId },
-                    { $set: { isAvailable: true } }
                 );
 
-                return res.status(409).json({
-                    message: "Request is unavailable or already accepted."
-                });
-            }
+                if (!driver) {
+                    const error = new Error(
+                        "You must be online and available to accept a request."
+                    );
+                    error.statusCode = 409;
+                    throw error;
+                }
+
+                // Step 3: Accept pending request
+                const request = await AmbulanceRequest.findOneAndUpdate(
+                    {
+                        _id: req.params.requestId,
+                        status: "pending",
+                        assignedDriver: null
+                    },
+                    {
+                        $set: {
+                            status: "accepted",
+                            assignedDriver: req.user.userId
+                        }
+                    },
+                    {
+                        returnDocument: "after",
+                        runValidators: true,
+                        session
+                    }
+                );
+
+                if (!request) {
+                    const error = new Error(
+                        "Request is unavailable or already accepted."
+                    );
+                    error.statusCode = 409;
+                    throw error;
+                }
+
+                acceptedRequest = request;
+            });
 
             return res.status(200).json({
                 message: "Ambulance request accepted successfully.",
-                request
+                request: acceptedRequest
             });
 
         } catch (error) {
             console.error("Accept request error:", error.message);
 
-            if (driverLocked) {
-                const activeRequest = await AmbulanceRequest.findOne({
-                    assignedDriver: req.user.userId,
-                    status: { $in: ["accepted", "assigned"] }
-                });
-
-                if (!activeRequest) {
-                    await User.updateOne(
-                        { _id: req.user.userId },
-                        { $set: { isAvailable: true } }
-                    );
-                }
+            if (error.statusCode === 409) {
+                return res.status(409).json(
+                    error.responseBody || {
+                        message: error.message
+                    }
+                );
             }
 
             return res.status(500).json({
                 message: "Server error while accepting ambulance request."
             });
+
+        } finally {
+            await session.endSession();
         }
     }
 );
+
 
 
 router.get(
