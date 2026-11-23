@@ -30,6 +30,8 @@ const io = new Server(server, {
 });
 
 // Socket.IO JWT Authentication
+
+
 io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
 
@@ -40,13 +42,26 @@ io.use((socket, next) => {
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-        socket.user = decoded;
+        if (
+            !decoded.userId ||
+            !mongoose.Types.ObjectId.isValid(decoded.userId) ||
+            !["patient", "driver", "hospital"].includes(decoded.role)
+        ) {
+            return next(new Error("Invalid token payload."));
+        }
+
+        socket.user = {
+            userId: decoded.userId,
+            role: decoded.role
+        };
 
         next();
+
     } catch (error) {
         next(new Error("Invalid or expired token."));
     }
 });
+
 
 // Socket.IO Connection
 io.on("connection", (socket) => {

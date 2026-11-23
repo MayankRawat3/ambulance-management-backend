@@ -53,7 +53,11 @@ const ambulanceRequestSchema = new mongoose.Schema(
         description: {
             type: String,
             trim: true,
-            default: ""
+            default: "",
+            maxlength: [
+                1000,
+                "Description cannot exceed 1000 characters."
+            ]
         },
 
         status: {
