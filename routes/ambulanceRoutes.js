@@ -683,6 +683,7 @@ router.patch(
 );
 
 //    
+
 router.patch(
     "/:requestId/cancel",
     authMiddleware,
@@ -694,29 +695,71 @@ router.patch(
             });
         }
 
-        let cancelledRequest = null;
-        let driverReleased = false;
+        const session = await mongoose.startSession();
 
         try {
-            // Step 1: Cancel pending or active request
-            cancelledRequest = await AmbulanceRequest.findOneAndUpdate(
-                {
-                    _id: req.params.requestId,
-                    patient: req.user.userId,
-                    status: {
-                        $in: ["pending", "accepted", "assigned"]
+            let cancelledRequest = null;
+            let driverAvailability = null;
+
+            await session.withTransaction(async () => {
+
+                // Step 1: Cancel only patient's pending or active request
+                cancelledRequest = await AmbulanceRequest.findOneAndUpdate(
+                    {
+                        _id: req.params.requestId,
+                        patient: req.user.userId,
+                        status: {
+                            $in: ["pending", "accepted", "assigned"]
+                        }
+                    },
+                    {
+                        $set: {
+                            status: "cancelled"
+                        }
+                    },
+                    {
+                        new: true,
+                        runValidators: true,
+                        session
                     }
-                },
-                {
-                    $set: {
-                        status: "cancelled"
-                    }
-                },
-                {
-                    returnDocument: "after",
-                    runValidators: true
+                );
+
+                if (!cancelledRequest) {
+                    return;
                 }
-            );
+
+                // Step 2: Release assigned driver safely
+                if (cancelledRequest.assignedDriver) {
+
+                    // Check whether driver has another active request
+                    const otherActiveRequest = await AmbulanceRequest.findOne({
+                        assignedDriver: cancelledRequest.assignedDriver,
+                        _id: { $ne: cancelledRequest._id },
+                        status: {
+                            $in: ["accepted", "assigned"]
+                        }
+                    }).session(session);
+
+                    // Driver is available only if no other active request exists
+                    const driverUpdate = await User.updateOne(
+                        {
+                            _id: cancelledRequest.assignedDriver,
+                            role: "driver"
+                        },
+                        {
+                            $set: {
+                                isAvailable: !otherActiveRequest
+                            }
+                        },
+                        { session }
+                    );
+
+                    if (driverUpdate.matchedCount === 0) {
+                        throw new Error("Assigned driver not found.");
+                    }
+                    driverAvailability = !otherActiveRequest;
+                }
+            });
 
             if (!cancelledRequest) {
                 return res.status(404).json({
@@ -724,63 +767,22 @@ router.patch(
                 });
             }
 
-            // Step 2: Release assigned driver
-            if (cancelledRequest.assignedDriver) {
-                const driver = await User.findOneAndUpdate(
-                    {
-                        _id: cancelledRequest.assignedDriver,
-                        role: "driver"
-                    },
-                    {
-                        $set: {
-                            isAvailable: true
-                        }
-                    },
-                    {
-                        returnDocument: "after"
-                    }
-                );
-
-                if (!driver) {
-                    throw new Error("Assigned driver not found.");
-                }
-
-                driverReleased = true;
-            }
-
             return res.status(200).json({
                 message: "Ambulance request cancelled successfully.",
                 request: cancelledRequest,
-                driverAvailability: cancelledRequest.assignedDriver
-                    ? true
-                    : null
+                driverAvailability: driverAvailability
+
             });
 
         } catch (error) {
             console.error("Cancel request error:", error.message);
 
-            // Step 3: Restore request if driver release failed
-            if (cancelledRequest && !driverReleased) {
-                await AmbulanceRequest.updateOne(
-                    {
-                        _id: cancelledRequest._id,
-                        patient: req.user.userId,
-                        status: "cancelled",
-                        assignedDriver: cancelledRequest.assignedDriver
-                    },
-                    {
-                        $set: {
-                            status: cancelledRequest.assignedDriver
-                                ? "accepted"
-                                : "pending"
-                        }
-                    }
-                );
-            }
-
             return res.status(500).json({
                 message: "Server error while cancelling ambulance request."
             });
+
+        } finally {
+            await session.endSession();
         }
     }
 );
