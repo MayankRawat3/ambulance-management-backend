@@ -16,6 +16,7 @@ const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const AmbulanceRequest = require("./models/AmbulanceRequest");
 const User = require("./models/User");
+const { notFound, errorHandler } = require("./middleware/errorMiddleware");
 
 const app = express();
 
@@ -267,6 +268,12 @@ async function startServer() {
         process.exit(1);
     }
 }
+
+// Handle unknown routes
+app.use(notFound);
+
+// Centralized error handler
+app.use(errorHandler);
 
 startServer();
 
