@@ -607,6 +607,9 @@ router.get(
 
 // PATCH /:requestId/complete
 
+
+// PATCH /:requestId/complete
+
 router.patch(
     "/:requestId/complete",
     authMiddleware,
@@ -619,57 +622,75 @@ router.patch(
             });
         }
 
-        try {
-            // Step 1: Complete the assigned request
-            const request = await AmbulanceRequest.findOneAndUpdate(
-                {
-                    _id: req.params.requestId,
-                    assignedDriver: req.user.userId,
-                    status: "accepted"
-                },
-                {
-                    $set: {
-                        status: "completed"
-                    }
-                },
-                {
-                    returnDocument: "after",
-                    runValidators: true
-                }
-            );
+        const session = await mongoose.startSession();
 
-            if (!request) {
+        try {
+            let completedRequest = null;
+            let driverAvailability = null;
+
+            await session.withTransaction(async () => {
+
+                // Step 1: Complete only the driver's accepted request
+                completedRequest = await AmbulanceRequest.findOneAndUpdate(
+                    {
+                        _id: req.params.requestId,
+                        assignedDriver: req.user.userId,
+                        status: "accepted"
+                    },
+                    {
+                        $set: {
+                            status: "completed"
+                        }
+                    },
+                    {
+                        new: true,
+                        runValidators: true,
+                        session
+                    }
+                );
+
+                if (!completedRequest) {
+                    return;
+                }
+
+                // Step 2: Check whether driver has another active request
+                const otherActiveRequest = await AmbulanceRequest.findOne({
+                    assignedDriver: req.user.userId,
+                    _id: { $ne: completedRequest._id },
+                    status: { $in: ["accepted", "assigned"] }
+                }).session(session);
+
+                // Step 3: Update driver availability
+                const driverUpdate = await User.updateOne(
+                    {
+                        _id: req.user.userId,
+                        role: "driver"
+                    },
+                    {
+                        $set: {
+                            isAvailable: !otherActiveRequest
+                        }
+                    },
+                    { session }
+                );
+
+                if (driverUpdate.matchedCount === 0) {
+                    throw new Error("Driver not found.");
+                }
+
+                driverAvailability = !otherActiveRequest;
+            });
+
+            if (!completedRequest) {
                 return res.status(404).json({
                     message: "Request not found or cannot be completed."
                 });
             }
 
-            // Step 2: Make driver available again
-            const driver = await User.findOneAndUpdate(
-                {
-                    _id: req.user.userId,
-                    role: "driver"
-                },
-                {
-                    $set: {
-                        isAvailable: true
-                    }
-                },
-                {
-                    returnDocument: "after"
-                }
-            );
-
-            if (!driver) {
-                return res.status(500).json({
-                    message: "Request completed, but driver availability could not be updated."
-                });
-            }
-
             return res.status(200).json({
                 message: "Ambulance request completed successfully.",
-                request,
-                driverAvailability: driver.isAvailable
+                request: completedRequest,
+                driverAvailability: driverAvailability
             });
 
         } catch (error) {
@@ -678,9 +699,13 @@ router.patch(
             return res.status(500).json({
                 message: "Server error while completing ambulance request."
             });
+
+        } finally {
+            await session.endSession();
         }
     }
 );
+
 
 //    
 
