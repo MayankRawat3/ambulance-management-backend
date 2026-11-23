@@ -398,15 +398,15 @@ router.patch(
     authMiddleware,
     authorizeRole("hospital"),
     async (req, res) => {
+        const { requestId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(requestId)) {
+            return res.status(400).json({
+                message: "Invalid ambulance request ID."
+            });
+        }
+
         try {
-            const { requestId } = req.params;
-
-            if (!mongoose.Types.ObjectId.isValid(requestId)) {
-                return res.status(400).json({
-                    message: "Invalid ambulance request ID."
-                });
-            }
-
             const request = await AmbulanceRequest.findOne({
                 _id: requestId,
                 status: "pending",
@@ -448,79 +448,122 @@ router.patch(
             }
 
             for (const candidate of drivers) {
-                const activeRequest = await AmbulanceRequest.findOne({
-                    assignedDriver: candidate._id,
-                    status: { $in: ["accepted", "assigned"] }
-                });
+                const session = await mongoose.startSession();
 
-                if (activeRequest) {
-                    await User.updateOne(
-                        { _id: candidate._id },
-                        { $set: { isAvailable: false } }
-                    );
-                    continue;
-                }
+                try {
+                    let result = null;
 
-                const lockedDriver = await User.findOneAndUpdate(
-                    {
-                        _id: candidate._id,
-                        role: "driver",
-                        isAvailable: true
-                    },
-                    {
-                        $set: { isAvailable: false }
-                    },
-                    { returnDocument: "after" }
-                );
+                    await session.withTransaction(async () => {
+                        result = null;
 
-                if (!lockedDriver) {
-                    continue;
-                }
-
-                const assignedRequest =
-                    await AmbulanceRequest.findOneAndUpdate(
-                        {
-                            _id: requestId,
-                            status: "pending",
-                            assignedDriver: null
-                        },
-                        {
-                            $set: {
+                        const activeRequest =
+                            await AmbulanceRequest.findOne({
                                 assignedDriver: candidate._id,
-                                status: "accepted"
-                            }
-                        },
-                        {
-                            returnDocument: "after",
-                            runValidators: true
+                                status: {
+                                    $in: ["accepted", "assigned"]
+                                }
+                            }).session(session);
+
+                        if (activeRequest) {
+                            await User.updateOne(
+                                {
+                                    _id: candidate._id,
+                                    role: "driver"
+                                },
+                                {
+                                    $set: { isAvailable: false }
+                                },
+                                { session }
+                            );
+
+                            result = { skipped: true };
+                            return;
                         }
-                    );
 
-                if (!assignedRequest) {
-                    await User.updateOne(
-                        { _id: candidate._id },
-                        { $set: { isAvailable: true } }
-                    );
+                        const lockedDriver =
+                            await User.findOneAndUpdate(
+                                {
+                                    _id: candidate._id,
+                                    role: "driver",
+                                    isAvailable: true
+                                },
+                                {
+                                    $set: { isAvailable: false }
+                                },
+                                {
+                                    returnDocument: "after",
+                                    session
+                                }
+                            );
 
-                    return res.status(409).json({
-                        message: "Request was assigned or changed by another process."
+                        if (!lockedDriver) {
+                            result = { skipped: true };
+                            return;
+                        }
+
+                        const assignedRequest =
+                            await AmbulanceRequest.findOneAndUpdate(
+                                {
+                                    _id: requestId,
+                                    status: "pending",
+                                    assignedDriver: null
+                                },
+                                {
+                                    $set: {
+                                        assignedDriver: candidate._id,
+                                        status: "accepted"
+                                    }
+                                },
+                                {
+                                    returnDocument: "after",
+                                    runValidators: true,
+                                    session
+                                }
+                            );
+
+                        if (!assignedRequest) {
+                            const error = new Error(
+                                "Request was assigned or changed by another process."
+                            );
+                            error.statusCode = 409;
+                            throw error;
+                        }
+
+                        result = {
+                            request: assignedRequest,
+                            driver: lockedDriver
+                        };
                     });
-                }
 
-                return res.status(200).json({
-                    message: "Nearest driver assigned successfully.",
-                    distanceInMeters: candidate.distanceInMeters,
-                    distanceInKm: Number(
-                        (candidate.distanceInMeters / 1000).toFixed(2)
-                    ),
-                    request: assignedRequest,
-                    driver: {
-                        _id: lockedDriver._id,
-                        name: lockedDriver.name,
-                        phone: lockedDriver.phone,
-                        isAvailable: lockedDriver.isAvailable
+                    if (result?.request) {
+                        return res.status(200).json({
+                            message: "Nearest driver assigned successfully.",
+                            distanceInMeters: candidate.distanceInMeters,
+                            distanceInKm: Number(
+                                (candidate.distanceInMeters / 1000).toFixed(2)
+                            ),
+                            request: result.request,
+                            driver: {
+                                _id: result.driver._id,
+                                name: result.driver.name,
+                                phone: result.driver.phone,
+                                isAvailable: result.driver.isAvailable
+                            }
+                        });
                     }
-                });
+
+                } catch (error) {
+                    if (error.statusCode === 409) {
+                        return res.status(409).json({
+                            message: error.message
+                        });
+                    }
+
+                    throw error;
+
+                } finally {
+                    await session.endSession();
+                }
             }
 
             return res.status(409).json({
@@ -742,55 +785,83 @@ router.patch(
     }
 );
 
-
 router.patch(
     "/availability",
     authMiddleware,
     authorizeRole("driver"),
     async (req, res) => {
+        const { isAvailable } = req.body;
+
+        if (typeof isAvailable !== "boolean") {
+            return res.status(400).json({
+                message: "isAvailable must be true or false."
+            });
+        }
+
+        const session = await mongoose.startSession();
+
         try {
-            const { isAvailable } = req.body;
+            let updatedDriver = null;
 
-            if (typeof isAvailable !== "boolean") {
-                return res.status(400).json({
-                    message: "isAvailable must be true or false."
-                });
-            }
+            await session.withTransaction(async () => {
 
-            const driver = await User.findOneAndUpdate(
-                {
-                    _id: req.user.userId,
-                    role: "driver"
-                },
-                {
-                    $set: { isAvailable }
-                },
-                {
-                    new: true,
-                    runValidators: true
+                // Prevent going online with an active request
+                if (isAvailable === true) {
+                    const activeRequest = await AmbulanceRequest.findOne({
+                        assignedDriver: req.user.userId,
+                        status: { $in: ["accepted", "assigned"] }
+                    }).session(session);
+
+                    if (activeRequest) {
+                        const error = new Error(
+                            "You cannot become available while an ambulance request is active."
+                        );
+                        error.statusCode = 409;
+                        throw error;
+                    }
                 }
-            ).select("-password");
 
-            if (!driver) {
-                return res.status(404).json({
-                    message: "Driver not found."
-                });
-            }
+                updatedDriver = await User.findOneAndUpdate(
+                    {
+                        _id: req.user.userId,
+                        role: "driver"
+                    },
+                    {
+                        $set: { isAvailable }
+                    },
+                    {
+                        returnDocument: "after",
+                        runValidators: true,
+                        session
+                    }
+                ).select("-password");
+
+                if (!updatedDriver) {
+                    const error = new Error("Driver not found.");
+                    error.statusCode = 404;
+                    throw error;
+                }
+            });
 
             return res.status(200).json({
                 message: "Driver availability updated successfully.",
-                driver
+                driver: updatedDriver
             });
+
         } catch (error) {
             console.error("Availability update error:", error.message);
 
-            return res.status(500).json({
-                message: "Server error while updating driver availability."
+            return res.status(error.statusCode || 500).json({
+                message: error.statusCode
+                    ? error.message
+                    : "Server error while updating driver availability."
             });
+
+        } finally {
+            await session.endSession();
         }
     }
 );
-
 
 router.get(
     "/availability",
