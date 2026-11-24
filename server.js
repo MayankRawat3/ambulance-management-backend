@@ -121,86 +121,86 @@ io.on("connection", (socket) => {
 
     // Handle live location updates from drivers
     socket.on("update-driver-location", async (data) => {
-    try {
-        const { requestId, latitude, longitude } = data || {};
+        try {
+            const { requestId, latitude, longitude } = data || {};
 
-        if (socket.user.role !== "driver") {
-            return socket.emit("tracking-error", {
-                message: "Only drivers can update location."
-            });
-        }
-
-        if (!mongoose.Types.ObjectId.isValid(requestId)) {
-            return socket.emit("tracking-error", {
-                message: "Invalid request ID."
-            });
-        }
-
-        if (
-            typeof latitude !== "number" ||
-            typeof longitude !== "number" ||
-            latitude < -90 ||
-            latitude > 90 ||
-            longitude < -180 ||
-            longitude > 180
-        ) {
-            return socket.emit("tracking-error", {
-                message: "Invalid latitude or longitude."
-            });
-        }
-
-        const ambulanceRequest = await AmbulanceRequest.findOne({
-            _id: requestId,
-            assignedDriver: socket.user.userId,
-            status: { $in: ["accepted", "assigned"] }
-        });
-
-        if (!ambulanceRequest) {
-            return socket.emit("tracking-error", {
-                message: "No active assigned request found."
-            });
-        }
-
-        const driver = await User.findOneAndUpdate(
-            {
-                _id: socket.user.userId,
-                role: "driver"
-            },
-            {
-                location: {
-                    type: "Point",
-                    coordinates: [longitude, latitude]
-                }
-            },
-            { returnDocument: "after" }
-        ).select("location");
-
-        if (!driver) {
-            return socket.emit("tracking-error", {
-                message: "Driver not found."
-            });
-        }
-
-        io.to(`ambulance:${requestId}`).emit(
-            "driver-location-updated",
-            {
-                driverId: socket.user.userId,
-                latitude,
-                longitude,
-                updatedAt: new Date()
+            if (socket.user.role !== "driver") {
+                return socket.emit("tracking-error", {
+                    message: "Only drivers can update location."
+                });
             }
-        );
 
-    } catch (error) {
-        console.error("Live location error:", error.message);
+            if (!mongoose.Types.ObjectId.isValid(requestId)) {
+                return socket.emit("tracking-error", {
+                    message: "Invalid request ID."
+                });
+            }
 
-        socket.emit("tracking-error", {
-            message: "Unable to update live location."
-        });
-    }
-});
+            if (
+                typeof latitude !== "number" ||
+                typeof longitude !== "number" ||
+                latitude < -90 ||
+                latitude > 90 ||
+                longitude < -180 ||
+                longitude > 180
+            ) {
+                return socket.emit("tracking-error", {
+                    message: "Invalid latitude or longitude."
+                });
+            }
 
-// Handle disconnection
+            const ambulanceRequest = await AmbulanceRequest.findOne({
+                _id: requestId,
+                assignedDriver: socket.user.userId,
+                status: { $in: ["accepted", "assigned"] }
+            });
+
+            if (!ambulanceRequest) {
+                return socket.emit("tracking-error", {
+                    message: "No active assigned request found."
+                });
+            }
+
+            const driver = await User.findOneAndUpdate(
+                {
+                    _id: socket.user.userId,
+                    role: "driver"
+                },
+                {
+                    location: {
+                        type: "Point",
+                        coordinates: [longitude, latitude]
+                    }
+                },
+                { returnDocument: "after" }
+            ).select("location");
+
+            if (!driver) {
+                return socket.emit("tracking-error", {
+                    message: "Driver not found."
+                });
+            }
+
+            io.to(`ambulance:${requestId}`).emit(
+                "driver-location-updated",
+                {
+                    driverId: socket.user.userId,
+                    latitude,
+                    longitude,
+                    updatedAt: new Date()
+                }
+            );
+
+        } catch (error) {
+            console.error("Live location error:", error.message);
+
+            socket.emit("tracking-error", {
+                message: "Unable to update live location."
+            });
+        }
+    });
+
+    // Handle disconnection
 
     socket.on("disconnect", () => {
         console.log("Socket disconnected:", socket.user.userId);
@@ -275,9 +275,16 @@ async function startServer() {
 
         console.log("MongoDB connected successfully");
 
-        server.listen(PORT, () => {
-            console.log(`Server running at http://localhost:${PORT}`);
+        // server.listen(PORT, () => {
+        //     console.log(`Server running at http://localhost:${PORT}`);
+        // });
+
+        server.listen(PORT, "0.0.0.0", () => {
+            console.log(`Server running on port ${PORT}`);
         });
+
+
+
     } catch (error) {
         console.error("MongoDB connection failed:", error.message);
         process.exit(1);
