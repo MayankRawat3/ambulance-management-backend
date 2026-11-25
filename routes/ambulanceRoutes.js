@@ -4,9 +4,21 @@ const authMiddleware = require("../middleware/authMiddleware");
 const authorizeRole = require("../middleware/roleMiddleware");
 const User = require("../models/User");
 const mongoose = require("mongoose");
+const rateLimit = require("express-rate-limit");
 
 
 const router = express.Router();
+const ACTIVE_REQUEST_STATUSES = ["accepted", "assigned"];
+const requestCreationLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 30,
+    keyGenerator: (req) => req.user.userId,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: {
+        message: "Too many ambulance requests. Please try again in one minute."
+    }
+});
 
 
 // Create a new ambulance request
@@ -16,6 +28,7 @@ router.post(
     "/request",
     authMiddleware,
     authorizeRole("patient"),
+    requestCreationLimiter,
     async (req, res) => {
         try {
             const {
@@ -186,7 +199,7 @@ router.patch(
                 // Step 1: Check existing active request
                 const activeRequest = await AmbulanceRequest.findOne({
                     assignedDriver: req.user.userId,
-                    status: { $in: ["accepted", "assigned"] }
+                    status: { $in: ACTIVE_REQUEST_STATUSES }
                 }).session(session);
 
                 if (activeRequest) {
@@ -459,9 +472,7 @@ router.patch(
                         const activeRequest =
                             await AmbulanceRequest.findOne({
                                 assignedDriver: candidate._id,
-                                status: {
-                                    $in: ["accepted", "assigned"]
-                                }
+                                status: { $in: ACTIVE_REQUEST_STATUSES }
                             }).session(session);
 
                         if (activeRequest) {
@@ -592,9 +603,15 @@ router.get(
                 .populate("patient", "name phone email")
                 .sort({ createdAt: -1 });
 
+            const activeRequests = requests.filter((request) =>
+                ACTIVE_REQUEST_STATUSES.includes(request.status)
+            );
+
             return res.status(200).json({
                 message: "Your assigned ambulance requests fetched successfully",
-                requests
+                requests,
+                activeRequests,
+                activeTripCount: activeRequests.length
             });
         } catch (error) {
             console.error("My assigned requests error:", error.message);
@@ -630,12 +647,12 @@ router.patch(
 
             await session.withTransaction(async () => {
 
-                // Step 1: Complete only the driver's accepted request
+                // Step 1: Complete only the driver's active request
                 completedRequest = await AmbulanceRequest.findOneAndUpdate(
                     {
                         _id: req.params.requestId,
                         assignedDriver: req.user.userId,
-                        status: "accepted"
+                        status: { $in: ACTIVE_REQUEST_STATUSES }
                     },
                     {
                         $set: {
@@ -657,7 +674,7 @@ router.patch(
                 const otherActiveRequest = await AmbulanceRequest.findOne({
                     assignedDriver: req.user.userId,
                     _id: { $ne: completedRequest._id },
-                    status: { $in: ["accepted", "assigned"] }
+                    status: { $in: ACTIVE_REQUEST_STATUSES }
                 }).session(session);
 
                 // Step 3: Update driver availability
@@ -836,7 +853,7 @@ router.patch(
                 if (isAvailable === true) {
                     const activeRequest = await AmbulanceRequest.findOne({
                         assignedDriver: req.user.userId,
-                        status: { $in: ["accepted", "assigned"] }
+                        status: { $in: ACTIVE_REQUEST_STATUSES }
                     }).session(session);
 
                     if (activeRequest) {
@@ -1031,7 +1048,7 @@ router.get(
             const ambulanceRequest = await AmbulanceRequest.findOne({
                 _id: requestId,
                 patient: req.user.userId,
-                status: { $in: ["accepted", "assigned"] }
+                status: { $in: ACTIVE_REQUEST_STATUSES }
             }).populate("assignedDriver", "name phone location");
 
             if (!ambulanceRequest) {

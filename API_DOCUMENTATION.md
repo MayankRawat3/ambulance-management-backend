@@ -110,6 +110,8 @@ All Patient APIs require JWT authentication and the `patient` role.
 Purpose:
 Creates a new ambulance request.
 
+Request creation uses a separate per-patient limit of 30 requests per minute. Other APIs use a shared limit of 1,000 requests per 15 minutes to accommodate normal app polling while retaining abuse protection. Authentication endpoints remain protected by their separate login rate limit.
+
 ### Request Body
 
 ```json
@@ -357,6 +359,7 @@ Patient details included:
 - Email
 
 Requests are sorted newest first.
+The response also includes `activeRequests` (requests with status `accepted` or `assigned`) and `activeTripCount`, so clients can display the driver's current active trips without deriving the count from request history.
 
 ### Success Response
 
@@ -365,7 +368,9 @@ Status: `200 OK`
 ```json
 {
   "message": "Your assigned ambulance requests fetched successfully",
-  "requests": []
+  "requests": [],
+  "activeRequests": [],
+  "activeTripCount": 0
 }
 ```
 
@@ -386,7 +391,7 @@ Allows the assigned driver to mark an accepted ambulance request as completed.
 ### Business Rules
 
 - Only the assigned driver can complete the request.
-- Request status must be `accepted`.
+- Request status must be `accepted` or `assigned`.
 - Request status changes to `completed`.
 - Driver availability is recalculated based on other active requests.
 - Updates are performed inside a MongoDB transaction.

@@ -215,7 +215,9 @@ app.use(express.json({ limit: "10kb" }));
 
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 100,
+    limit: 1000,
+    skip: (req) => req.method === "POST" &&
+        req.path === "/api/ambulance/request",
     standardHeaders: "draft-8",
     legacyHeaders: false,
     message: {
@@ -298,5 +300,3 @@ app.use(notFound);
 app.use(errorHandler);
 
 startServer();
-
-
